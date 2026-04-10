@@ -15,6 +15,21 @@ const { callGatewayToolMock, readGatewayCallOptionsMock, configState } = vi.hois
 const { resolvePluginConfigContractsByIdMock } = vi.hoisted(() => ({
   resolvePluginConfigContractsByIdMock: vi.fn(),
 }));
+const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
+  loadPluginManifestRegistryMock: vi.fn(() => ({
+    plugins: [
+      {
+        id: "acpx",
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        channels: [],
+        legacyPluginIds: [],
+      },
+    ],
+    diagnostics: [],
+  })),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -38,6 +53,14 @@ vi.mock("../plugins/config-contracts.js", async (importOriginal) => {
   return {
     ...actual,
     resolvePluginConfigContractsById: resolvePluginConfigContractsByIdMock,
+  };
+});
+
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
   };
 });
 
@@ -75,6 +98,7 @@ describe("gateway tool", () => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
     resolvePluginConfigContractsByIdMock.mockReset();
+    loadPluginManifestRegistryMock.mockReset();
     configState.value = {};
     resolvePluginConfigContractsByIdMock.mockImplementation(
       ({ pluginIds }: { pluginIds: string[] }) =>
@@ -89,6 +113,19 @@ describe("gateway tool", () => {
           ]),
         ),
     );
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "acpx",
+          origin: "bundled",
+          enabledByDefault: true,
+          providers: [],
+          channels: [],
+          legacyPluginIds: [],
+        },
+      ],
+      diagnostics: [],
+    });
     callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -514,6 +551,50 @@ describe("gateway tool", () => {
 
     await expect(
       tool.execute("call-enable-dangerous-plugins-globally", {
+        action: "config.patch",
+        raw: "{ plugins: { enabled: true } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when it globally re-enables plugins with dangerous config and manifests are unavailable", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              enabled: false,
+              entries: {
+                acpx: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-enable-dangerous-plugins-globally-without-manifests", {
         action: "config.patch",
         raw: "{ plugins: { enabled: true } }",
       }),

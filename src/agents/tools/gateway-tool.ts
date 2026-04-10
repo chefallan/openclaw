@@ -163,6 +163,10 @@ function isPluginDangerousFlagActive(
     cache: true,
   }).plugins.find((plugin) => plugin.id === pluginId);
   if (!manifestRecord) {
+    const globalEnabled = (rootConfig.plugins as { enabled?: unknown } | undefined)?.enabled;
+    if (globalEnabled === false) {
+      return false;
+    }
     return (pluginEntry as { enabled?: unknown }).enabled !== false;
   }
 
