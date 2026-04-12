@@ -16,6 +16,16 @@ vi.mock("./channel-react-action.runtime.js", async () => {
       args: Record<string, unknown>;
       toolContext?: { currentMessageId?: string | number | null };
     }) => args.messageId ?? toolContext?.currentMessageId ?? null,
+    readStringOrNumberParam: (params: Record<string, unknown>, key: string) => {
+      const value = params[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+      return undefined;
+    },
     isWhatsAppGroupJid: (value?: string | null) => (value ?? "").trim().endsWith("@g.us"),
     normalizeWhatsAppTarget: (value?: string | null) => {
       const raw = (value ?? "").trim();
@@ -227,6 +237,28 @@ describe("whatsapp react action messageId resolution", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
     expect(hoisted.handleWhatsAppAction).not.toHaveBeenCalled();
+  });
+
+  it("does not infer participant when messageId is explicitly provided", async () => {
+    await handleWhatsAppReactAction({
+      action: "react",
+      params: { emoji: "👍", to: "12345@g.us", messageId: "older-msg-7" },
+      cfg: baseCfg,
+      accountId: "default",
+      requesterSenderId: "123@lid",
+      toolContext: {
+        currentChannelId: "whatsapp:12345@g.us",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "older-msg-7",
+        participant: undefined,
+      }),
+      baseCfg,
+    );
   });
 
   it("skips context fallback when source is another provider", async () => {

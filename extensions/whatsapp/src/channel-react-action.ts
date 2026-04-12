@@ -3,6 +3,7 @@ import {
   resolveReactionMessageId,
   handleWhatsAppAction,
   normalizeWhatsAppTarget,
+  readStringOrNumberParam,
   readStringParam,
   type OpenClawConfig,
 } from "./channel-react-action.runtime.js";
@@ -51,11 +52,13 @@ export async function handleWhatsAppReactAction(params: {
     readStringParam(params.params, "messageId", { required: true });
   }
   const messageId = String(messageIdRaw);
+  const explicitMessageId = readStringOrNumberParam(params.params, "messageId");
   const emoji = readStringParam(params.params, "emoji", { allowEmpty: true });
   const remove = typeof params.params.remove === "boolean" ? params.params.remove : undefined;
   const explicitParticipant = readStringParam(params.params, "participant");
   const inferredParticipant =
     explicitParticipant ||
+    explicitMessageId != null ||
     !isWhatsAppSource ||
     isCrossChat ||
     !isWhatsAppGroupJid(explicitTarget ?? params.toolContext?.currentChannelId ?? "")
