@@ -2,17 +2,20 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import {
   buildAgentSummaries,
   listAgentEntries,
 } from "./agents.config.js";
-import { getOptimizedModel, isModelAlreadyOptimized } from "../agents/model-optimize.js";
-import type { OptimizeResult } from "../agents/model-optimize.js";
+import {
+  getOptimizedModel,
+  isModelAlreadyOptimized,
+  type OptimizeResult,
+} from "../agents/model-optimize.js";
 
 type AgentsOptimizeOptions = {
   agent?: string;
@@ -37,7 +40,6 @@ export async function agentsOptimizeCommand(
     return;
   }
   const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
 
   // Load the model catalog for recommendations.
   let catalog;
@@ -159,7 +161,6 @@ export async function agentsOptimizeCommand(
   // Interactive confirm.
   const prompter = createClackPrompter();
   const actionableEntries = entries.filter((e) => e.recommendation !== null);
-
   if (actionableEntries.length === 0) {
     return;
   }
@@ -180,7 +181,7 @@ export async function agentsOptimizeCommand(
 
 async function applyRecommendations(
   entries: OptimizeEntry[],
-  cfg: Parameters<typeof replaceConfigFile>[0]["nextConfig"],
+  cfg: OpenClawConfig,
   baseHash: string | undefined,
   runtime: RuntimeEnv,
 ) {
@@ -190,28 +191,19 @@ async function applyRecommendations(
   }
 
   // Apply all changes to the config in one atomic write.
-  let nextConfig = cfg as Record<string, unknown>;
+  const nextConfig = structuredClone(cfg);
+  const agentsConfig = (nextConfig.agents ??= {});
+  const agentList = (agentsConfig.list ??= []);
 
   for (const entry of actionable) {
     const rec = entry.recommendation!;
-    const agentList = (nextConfig.agents as { list?: unknown[] } | undefined)?.list ?? [];
-    const entryIndex = (agentList as Array<{ id?: string }>).findIndex(
-      (e) => normalizeAgentId(e.id ?? "") === entry.agentId,
-    );
+    const entryIndex = agentList.findIndex((agent) => normalizeAgentId(agent.id) === entry.agentId);
 
     if (entryIndex < 0) {
       // Agent not in list yet — add a minimal entry with the model override.
-      const agents = (nextConfig.agents as Record<string, unknown>) ?? {};
-      const list = Array.isArray(agents.list) ? [...agents.list] : [];
-      list.push({ id: entry.agentId, model: rec.recommended });
-      nextConfig = {
-        ...nextConfig,
-        agents: { ...agents, list },
-      };
+      agentList.push({ id: entry.agentId, model: rec.recommended });
     } else {
-      const agents = nextConfig.agents as Record<string, unknown>;
-      const list = [...(agentList as unknown[])];
-      const existing = list[entryIndex] as Record<string, unknown>;
+      const existing = agentList[entryIndex];
       const existingModel = existing.model;
 
       // Preserve fallbacks if the existing model was an object with fallbacks.
@@ -223,18 +215,14 @@ async function applyRecommendations(
         }
       }
 
-      list[entryIndex] = { ...existing, model: newModel };
-      nextConfig = {
-        ...nextConfig,
-        agents: { ...agents, list },
-      };
+      agentList[entryIndex] = { ...existing, model: newModel };
     }
 
     entry.applied = true;
   }
 
   await replaceConfigFile({
-    nextConfig: nextConfig as Parameters<typeof replaceConfigFile>[0]["nextConfig"],
+    nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
 

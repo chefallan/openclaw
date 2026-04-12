@@ -8,6 +8,8 @@
  *   premium  – highest capability, highest cost (use only when needed)
  */
 
+import { DEFAULT_PROVIDER } from "./defaults.js";
+import { parseModelRef } from "./model-selection-normalize.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 export type ModelCostTier = "economy" | "standard" | "premium";
@@ -27,9 +29,12 @@ const TIER_PATTERNS: { pattern: RegExp; tier: ModelCostTier }[] = [
   { pattern: /claude.*sonnet/i, tier: "standard" },
   { pattern: /claude.*haiku/i, tier: "economy" },
   // OpenAI
-  { pattern: /o[134]-?(pro|preview|mini)?/i, tier: "premium" },
-  { pattern: /gpt-5\.4(?!-mini)/i, tier: "premium" },
+  { pattern: /o[134]-(pro|preview)/i, tier: "premium" },
+  { pattern: /o[134](?!-)/i, tier: "premium" },
+  { pattern: /o[134]-mini/i, tier: "standard" },
   { pattern: /gpt-5\.4-mini/i, tier: "economy" },
+  { pattern: /gpt-5\.4-nano/i, tier: "economy" },
+  { pattern: /gpt-5\.4(?!-(mini|nano))/i, tier: "premium" },
   { pattern: /gpt-4o(?!-mini)/i, tier: "standard" },
   { pattern: /gpt-4o-mini/i, tier: "economy" },
   { pattern: /gpt-4\.5/i, tier: "standard" },
@@ -67,6 +72,27 @@ function splitModelRef(model: string): { provider: string; modelId: string } {
   return { provider: model.slice(0, slash), modelId: model.slice(slash + 1) };
 }
 
+function resolveCatalogProvider(model: string, catalog: ModelCatalogEntry[]): string | null {
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.includes("/")) {
+    return parseModelRef(trimmed, DEFAULT_PROVIDER)?.provider ?? null;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const providers = new Set<string>();
+  for (const entry of catalog) {
+    if (entry.id.trim().toLowerCase() === normalized || entry.alias?.trim().toLowerCase() === normalized) {
+      providers.add(entry.provider);
+    }
+  }
+
+  return providers.size === 1 ? [...providers][0] : null;
+}
+
 /** Build the canonical "provider/model" string from a catalog entry. */
 function catalogKey(entry: ModelCatalogEntry): string {
   return `${entry.provider}/${entry.id}`;
@@ -85,7 +111,8 @@ export function getOptimizedModel(
     return null;
   }
 
-  const { provider, modelId } = splitModelRef(currentModel.trim());
+  const { modelId } = splitModelRef(currentModel.trim());
+  const provider = resolveCatalogProvider(currentModel, catalog);
   const currentTier = getModelTier(modelId || currentModel);
 
   if (!currentTier || currentTier === "economy") {
@@ -93,12 +120,16 @@ export function getOptimizedModel(
     return null;
   }
 
+  if (!provider) {
+    // Do not recommend a cross-provider downgrade when the current model ref is ambiguous.
+    return null;
+  }
+
   // Target one tier lower.
   const targetTier: ModelCostTier = currentTier === "premium" ? "standard" : "economy";
 
   // Filter catalog to the same provider (if known) and target tier.
-  const providerCatalog =
-    provider ? catalog.filter((m) => m.provider === provider) : catalog;
+  const providerCatalog = catalog.filter((m) => m.provider === provider);
 
   const candidates = providerCatalog.filter((m) => getModelTier(m.id) === targetTier);
 
